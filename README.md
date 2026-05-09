@@ -1,6 +1,6 @@
 # Briar
 
-Briar includes a small FastAPI service that submits a Qwen3-TTS workflow to a local ComfyUI server.
+Briar now includes a small FastAPI service with a placeholder text-to-speech endpoint.
 
 ## Setup
 
@@ -13,24 +13,6 @@ python -m pip install -r requirements.txt
 ```
 
 On macOS or Linux, activate the environment with `source .venv/bin/activate` instead.
-
-## Workflow
-
-Export your ComfyUI workflow in API format and save it as:
-
-```text
-workflows\qwen3_tts.json
-```
-
-The workflow must contain a Qwen3-TTS node with a target text input such as `target_text`. When `POST /tts` is called, Briar loads that workflow, replaces the Qwen3-TTS target text with the incoming request text, submits the workflow to ComfyUI at `http://127.0.0.1:8188/prompt`, and polls `http://127.0.0.1:8188/history/{prompt_id}` until ComfyUI reports an audio output.
-
-## Run ComfyUI
-
-Start ComfyUI separately and keep it listening on the default local address:
-
-```text
-http://127.0.0.1:8188
-```
 
 ## Run the API
 
@@ -54,7 +36,7 @@ Returns a simple health check response:
 
 ### `POST /tts`
 
-Accepts text for text-to-speech generation, submits the configured ComfyUI workflow, waits up to 120 seconds for an audio output, and returns the ComfyUI `prompt_id` plus the generated audio location. Briar returns a clear HTTP 504 error if no audio appears before the timeout.
+Accepts text for future text-to-speech generation and currently returns a placeholder JSON response.
 
 Request:
 
@@ -66,11 +48,10 @@ Response:
 
 ```json
 {
-  "prompt_id": "00000000-0000-0000-0000-000000000000",
-  "filename": "generated.wav",
-  "subfolder": "",
-  "type": "output",
-  "audio_url": "http://127.0.0.1:8188/view?filename=generated.wav&subfolder=&type=output"
+  "status": "placeholder",
+  "message": "TTS generation is not implemented yet.",
+  "text": "Hello from Briar",
+  "audio_url": null
 }
 ```
 
