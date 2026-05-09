@@ -1,6 +1,6 @@
 # Briar
 
-Briar now includes a small FastAPI service with a placeholder text-to-speech endpoint.
+Briar includes a small FastAPI service that submits a Qwen3-TTS workflow to a local ComfyUI server.
 
 ## Setup
 
@@ -36,7 +36,7 @@ Returns a simple health check response:
 
 ### `POST /tts`
 
-Accepts text for future text-to-speech generation and currently returns a placeholder JSON response.
+Accepts text for text-to-speech generation, submits the configured ComfyUI workflow, waits up to 120 seconds for an audio output, and returns the ComfyUI `prompt_id` plus the generated audio location. Briar returns a clear HTTP 504 error if no audio appears before the timeout.
 
 Request:
 
@@ -48,10 +48,11 @@ Response:
 
 ```json
 {
-  "status": "placeholder",
-  "message": "TTS generation is not implemented yet.",
-  "text": "Hello from Briar",
-  "audio_url": null
+  "prompt_id": "00000000-0000-0000-0000-000000000000",
+  "filename": "generated.wav",
+  "subfolder": "",
+  "type": "output",
+  "audio_url": "http://127.0.0.1:8188/view?filename=generated.wav&subfolder=&type=output"
 }
 ```
 
