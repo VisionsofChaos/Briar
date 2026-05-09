@@ -1,0 +1,1 @@
+"""Briar FastAPI application package."""
