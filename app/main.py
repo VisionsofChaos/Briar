@@ -2,7 +2,6 @@
 
 import copy
 import json
-import logging
 import time
 from pathlib import Path
 from typing import Any
@@ -20,7 +19,6 @@ DEFAULT_HISTORY_TIMEOUT_SECONDS = 120
 POLL_INTERVAL_SECONDS = 1
 WORKFLOW_PATH = Path(__file__).resolve().parent.parent / "workflows" / "qwen3_tts.json"
 TARGET_TEXT_FIELDS = ("target_text", "text", "prompt")
-logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Briar TTS Service",
@@ -196,48 +194,19 @@ def audio_output_from_item(audio_item: dict[str, Any]) -> AudioOutput | None:
     )
 
 
-def iter_save_audio_items(value: Any) -> list[dict[str, Any]]:
-    """Recursively return dicts containing filenames from ComfyUI history output."""
+def iter_save_audio_items(node_output: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return Save Audio file items from one ComfyUI history node output."""
 
-    if isinstance(value, dict):
-        items = [value] if isinstance(value.get("filename"), str) and value["filename"] else []
-        for nested_value in value.values():
-            items.extend(iter_save_audio_items(nested_value))
-        return items
-
-    if isinstance(value, list):
-        items: list[dict[str, Any]] = []
-        for nested_value in value:
-            items.extend(iter_save_audio_items(nested_value))
-        return items
-
+    audio_items = node_output.get("audio") or node_output.get("audios")
+    if isinstance(audio_items, dict):
+        return [audio_items]
+    if isinstance(audio_items, list):
+        return [item for item in audio_items if isinstance(item, dict)]
     return []
 
 
-def history_debug_details(history: dict[str, Any], prompt_id: str) -> dict[str, Any]:
-    """Return ComfyUI history structure details for timeout debugging."""
-
-    prompt_history = history.get(prompt_id)
-    outputs = prompt_history.get("outputs") if isinstance(prompt_history, dict) else None
-
-    output_keys_by_node: dict[str, list[str]] = {}
-    if isinstance(outputs, dict):
-        output_keys_by_node = {
-            str(node_id): list(node_output.keys())
-            for node_id, node_output in outputs.items()
-            if isinstance(node_output, dict)
-        }
-
-    return {
-        "prompt_id": prompt_id,
-        "history_keys": list(history.keys()),
-        "output_node_ids": list(outputs.keys()) if isinstance(outputs, dict) else [],
-        "output_keys_by_node": output_keys_by_node,
-    }
-
-
 def extract_audio_output(history: dict[str, Any], prompt_id: str) -> AudioOutput | None:
-    """Extract the first generated audio/file output from ComfyUI history."""
+    """Extract the first Save Audio output from a ComfyUI history response."""
 
     prompt_history = history.get(prompt_id)
     if not isinstance(prompt_history, dict):
@@ -248,6 +217,9 @@ def extract_audio_output(history: dict[str, Any], prompt_id: str) -> AudioOutput
         return None
 
     for node_output in outputs.values():
+        if not isinstance(node_output, dict):
+            continue
+
         for audio_item in iter_save_audio_items(node_output):
             audio_output = audio_output_from_item(audio_item)
             if audio_output is not None:
@@ -266,26 +238,15 @@ def wait_for_audio_output(
 
     history_url = f"{base_url}/history/{prompt_id}"
     deadline = time.monotonic() + timeout_seconds
-    last_history: dict[str, Any] = {}
 
     while True:
         request = Request(history_url, method="GET")
         history = read_json_from_comfyui(request)
-        last_history = history
         audio_output = extract_audio_output(history, prompt_id)
         if audio_output is not None:
             return audio_output
 
         if time.monotonic() >= deadline:
-            debug_details = history_debug_details(last_history, prompt_id)
-            logger.warning(
-                "Timed out waiting for ComfyUI audio output. "
-                "prompt_id=%s history_keys=%s output_node_ids=%s output_keys_by_node=%s",
-                debug_details["prompt_id"],
-                debug_details["history_keys"],
-                debug_details["output_node_ids"],
-                debug_details["output_keys_by_node"],
-            )
             raise HTTPException(
                 status_code=504,
                 detail=(

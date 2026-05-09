@@ -14,24 +14,6 @@ python -m pip install -r requirements.txt
 
 On macOS or Linux, activate the environment with `source .venv/bin/activate` instead.
 
-## Workflow
-
-Export your ComfyUI workflow in API format and save it as:
-
-```text
-workflows\qwen3_tts.json
-```
-
-The workflow must contain a Qwen3-TTS VoiceClone node with a target text input such as `target_text` and a Save Audio node that writes the generated audio. When `POST /tts` is called, Briar loads that workflow, replaces the Qwen3-TTS VoiceClone target text with the incoming request text, submits the workflow to ComfyUI at `http://127.0.0.1:8188/prompt`, and polls `http://127.0.0.1:8188/history/{prompt_id}` until ComfyUI reports a Save Audio output. Briar recursively scans each output node for any nested dictionary containing a non-empty `filename`, including common ComfyUI keys such as `audio`, `audios`, and `files`, so audio files saved in subfolders like `audio` are detected.
-
-## Run ComfyUI
-
-Start ComfyUI separately and keep it listening on the default local address:
-
-```text
-http://127.0.0.1:8188
-```
-
 ## Run the API
 
 Start the development server with Python's module runner so the command works consistently on Windows, macOS, and Linux:
