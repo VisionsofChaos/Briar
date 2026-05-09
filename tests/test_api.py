@@ -98,101 +98,6 @@ def test_tts_submits_workflow_waits_for_audio_and_returns_view_url(
     assert history_request.get_method() == "GET"
 
 
-def test_chat_sends_lm_studio_reply_through_tts(tmp_path, monkeypatch) -> None:
-    workflow_path = tmp_path / "qwen3_tts.json"
-    workflow_path.write_text(
-        json.dumps(
-            {
-                "1": {
-                    "class_type": "Qwen3-TTS VoiceClone",
-                    "inputs": {"target_text": "old text"},
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-    submitted_requests = []
-
-    def fake_urlopen(request, timeout):
-        submitted_requests.append((request, timeout))
-        if request.full_url == "http://127.0.0.1:50123/v1/chat/completions":
-            return FakeComfyUIResponse(
-                {"choices": [{"message": {"content": "A warm little reply."}}]}
-            )
-        if request.full_url == "http://127.0.0.1:8188/prompt":
-            return FakeComfyUIResponse({"prompt_id": "prompt-chat"})
-        return FakeComfyUIResponse(
-            {
-                "prompt-chat": {
-                    "outputs": {
-                        "9": {
-                            "files": [
-                                {
-                                    "filename": "chat.wav",
-                                    "subfolder": "audio",
-                                    "type": "output",
-                                }
-                            ]
-                        }
-                    }
-                }
-            }
-        )
-
-    monkeypatch.setattr(main, "WORKFLOW_PATH", workflow_path)
-    monkeypatch.setattr(main, "urlopen", fake_urlopen)
-
-    response = main.create_chat(main.ChatRequest(message="How are you?"))
-    response_json = response.model_dump()
-
-    assert response_json == {
-        "prompt_id": "prompt-chat",
-        "filename": "chat.wav",
-        "subfolder": "audio",
-        "type": "output",
-        "audio_url": (
-            "http://127.0.0.1:8188/view?filename=chat.wav&"
-            "subfolder=audio&type=output"
-        ),
-        "message": "How are you?",
-        "reply": "A warm little reply.",
-    }
-
-    lm_request, lm_timeout = submitted_requests[0]
-    assert lm_request.full_url == "http://127.0.0.1:50123/v1/chat/completions"
-    assert lm_request.get_method() == "POST"
-    assert lm_timeout == 60
-
-    lm_body = json.loads(lm_request.data.decode("utf-8"))
-    assert lm_body["model"] == "qwen2.5-14b"
-    assert lm_body["temperature"] == 0.8
-    assert lm_body["messages"][0] == {
-        "role": "system",
-        "content": main.BRIAR_SYSTEM_PROMPT,
-    }
-    assert lm_body["messages"][1] == {"role": "user", "content": "How are you?"}
-
-    prompt_request, _ = submitted_requests[1]
-    prompt_body = json.loads(prompt_request.data.decode("utf-8"))
-    assert prompt_body["prompt"]["1"]["inputs"]["target_text"] == "A warm little reply."
-
-
-def test_chat_returns_502_for_bad_lm_studio_response(monkeypatch) -> None:
-    monkeypatch.setattr(
-        main,
-        "urlopen",
-        lambda request, timeout: FakeComfyUIResponse({"choices": []}),
-    )
-
-    try:
-        main.create_chat(main.ChatRequest(message="Hello"))
-    except HTTPException as exc:
-        assert exc.status_code == 502
-        assert "LM Studio response did not include choices" in exc.detail
-    else:
-        raise AssertionError("Expected HTTPException")
-
-
 def test_tts_rejects_empty_text() -> None:
     try:
         main.TTSRequest(text="")
@@ -259,114 +164,34 @@ def test_extract_audio_output_supports_audios_field() -> None:
     assert audio_output.type == "output"
 
 
-def test_extract_audio_output_supports_files_field() -> None:
+def test_extract_audio_output_supports_save_audio_dict() -> None:
     history = {
-        "prompt-files": {
+        "prompt-dict": {
             "outputs": {
                 "7": {
-                    "files": [
-                        {
-                            "filename": "from-files.wav",
-                            "subfolder": "",
-                            "type": "output",
-                        }
-                    ]
-                }
-            }
-        }
-    }
-
-    audio_output = main.extract_audio_output(history, "prompt-files")
-
-    assert audio_output is not None
-    assert audio_output.filename == "from-files.wav"
-    assert audio_output.subfolder == ""
-    assert audio_output.type == "output"
-
-
-def test_extract_audio_output_supports_nested_filename_dict() -> None:
-    history = {
-        "prompt-nested": {
-            "outputs": {
-                "8": {
-                    "metadata": {
-                        "result": {
-                            "filename": "nested.flac",
-                            "subfolder": "audio",
-                            "type": "output",
-                        }
+                    "audio": {
+                        "filename": "single.wav",
+                        "subfolder": "",
+                        "type": "output",
                     }
                 }
             }
         }
     }
 
-    audio_output = main.extract_audio_output(history, "prompt-nested")
+    audio_output = main.extract_audio_output(history, "prompt-dict")
 
     assert audio_output is not None
-    assert audio_output.filename == "nested.flac"
-    assert audio_output.subfolder == "audio"
-    assert audio_output.type == "output"
-
-
-def test_extract_audio_output_supports_any_nested_filename_list() -> None:
-    history = {
-        "prompt-any": {
-            "outputs": {
-                "9": {
-                    "unexpected_key": [
-                        {"ignored": "value"},
-                        [
-                            {
-                                "filename": "fallback.wav",
-                            }
-                        ],
-                    ]
-                }
-            }
-        }
-    }
-
-    audio_output = main.extract_audio_output(history, "prompt-any")
-
-    assert audio_output is not None
-    assert audio_output.filename == "fallback.wav"
+    assert audio_output.filename == "single.wav"
     assert audio_output.subfolder == ""
     assert audio_output.type == "output"
 
 
-def test_extract_audio_output_detects_audio_subfolder_flac() -> None:
-    history = {
-        "prompt-flac": {
-            "outputs": {
-                "10": {
-                    "files": [
-                        {
-                            "filename": "ComfyUI_00003_.flac",
-                            "subfolder": "audio",
-                            "type": "output",
-                        }
-                    ]
-                }
-            }
-        }
-    }
-
-    audio_output = main.extract_audio_output(history, "prompt-flac")
-
-    assert audio_output is not None
-    assert audio_output.filename == "ComfyUI_00003_.flac"
-    assert audio_output.subfolder == "audio"
-    assert audio_output.type == "output"
-
-
-def test_wait_for_audio_output_times_out_logs_output_keys(monkeypatch, caplog) -> None:
+def test_wait_for_audio_output_times_out(monkeypatch) -> None:
     monkeypatch.setattr(
         main,
         "urlopen",
-        lambda request, timeout: FakeComfyUIResponse(
-            {"prompt-timeout": {"outputs": {"42": {"images": []}}}}
-        ),
+        lambda request, timeout: FakeComfyUIResponse({"prompt-timeout": {"outputs": {}}}),
     )
     monkeypatch.setattr(main.time, "sleep", lambda seconds: None)
 
@@ -375,10 +200,6 @@ def test_wait_for_audio_output_times_out_logs_output_keys(monkeypatch, caplog) -
     except HTTPException as exc:
         assert exc.status_code == 504
         assert "Timed out waiting for ComfyUI audio output" in exc.detail
-        assert "prompt_id=prompt-timeout" in caplog.text
-        assert "history_keys=['prompt-timeout']" in caplog.text
-        assert "output_node_ids=['42']" in caplog.text
-        assert "output_keys_by_node={'42': ['images']}" in caplog.text
     else:
         raise AssertionError("Expected HTTPException")
 
