@@ -11,6 +11,7 @@ from urllib.request import Request, urlopen
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 
@@ -29,9 +30,11 @@ BRIAR_SYSTEM_PROMPT = (
 
 DEFAULT_HISTORY_TIMEOUT_SECONDS = 300
 POLL_INTERVAL_SECONDS = 1
-TTS_MAX_NEW_TOKENS = 128
+TTS_MAX_NEW_TOKENS = 512
 
-WORKFLOW_PATH = Path(__file__).resolve().parent.parent / "workflows" / "qwen3_tts.json"
+ROOT_DIR = Path(__file__).resolve().parent.parent
+WORKFLOW_PATH = ROOT_DIR / "workflows" / "qwen3_tts.json"
+STATIC_DIR = ROOT_DIR / "static"
 TARGET_TEXT_FIELDS = ("target_text", "text", "prompt")
 
 
@@ -59,8 +62,8 @@ FRONTEND_HTML = """<!doctype html>
         linear-gradient(135deg, #10150f 0%, #182016 100%);
     }
     main {
-      width: min(920px, calc(100vw - 2rem));
-      height: min(760px, calc(100vh - 2rem));
+      width: min(1080px, calc(100vw - 2rem));
+      height: min(800px, calc(100vh - 2rem));
       display: flex;
       flex-direction: column;
       gap: 1rem;
@@ -73,6 +76,52 @@ FRONTEND_HTML = """<!doctype html>
     }
     header h1 { margin: 0; font-size: clamp(1.8rem, 4vw, 3rem); }
     header p { margin: 0.35rem 0 0; color: #c3cfb3; }
+    .stage {
+      flex: 1;
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(220px, 320px) 1fr;
+      gap: 1rem;
+      align-items: stretch;
+    }
+    .portrait-card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 0.8rem;
+      padding: 1rem;
+      border-radius: 18px;
+      background: rgba(0, 0, 0, 0.22);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .portrait-frame {
+      width: min(280px, 100%);
+      aspect-ratio: 1 / 1;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+      border-radius: 28px;
+      background: radial-gradient(circle at 50% 18%, rgba(184, 230, 142, 0.22), rgba(0, 0, 0, 0.22));
+      border: 1px solid rgba(222, 232, 202, 0.12);
+    }
+    #briar-portrait {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+    .portrait-fallback {
+      display: none;
+      width: 100%;
+      height: 100%;
+      place-items: center;
+      font-size: clamp(4rem, 16vw, 7rem);
+      font-weight: 900;
+      color: #dcefc8;
+    }
+    .portrait-frame.missing #briar-portrait { display: none; }
+    .portrait-frame.missing .portrait-fallback { display: grid; }
+    .portrait-caption { margin: 0; color: #c3cfb3; text-align: center; }
     #chat-log {
       flex: 1;
       overflow-y: auto;
@@ -139,6 +188,14 @@ FRONTEND_HTML = """<!doctype html>
     #status { min-height: 1.35rem; color: #c3cfb3; }
     #status.error { color: #ffb4a8; }
     audio { width: 100%; }
+    @media (max-width: 760px) {
+      main { height: calc(100vh - 1rem); width: calc(100vw - 1rem); padding: 0.8rem; }
+      .stage { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+      .portrait-card { flex-direction: row; justify-content: flex-start; }
+      .portrait-frame { width: 120px; border-radius: 20px; }
+      .portrait-caption { text-align: left; }
+      .message { max-width: 92%; }
+    }
   </style>
 </head>
 <body>
@@ -147,14 +204,28 @@ FRONTEND_HTML = """<!doctype html>
       <h1>Briar</h1>
       <p>A local voice chat for warm, grounded replies.</p>
     </header>
-    <section id="chat-log" aria-live="polite" aria-label="Chat log"></section>
+
+    <div class="stage">
+      <aside class="portrait-card" aria-label="Briar portrait">
+        <div id="portrait-frame" class="portrait-frame">
+          <img id="briar-portrait" src="/static/visemes/briar_idle.png" alt="Briar portrait">
+          <div class="portrait-fallback" aria-hidden="true">B</div>
+        </div>
+        <p class="portrait-caption">Briar is listening.</p>
+      </aside>
+
+      <section id="chat-log" aria-live="polite" aria-label="Chat log"></section>
+    </div>
+
     <div id="status" role="status"></div>
     <audio id="player" controls></audio>
+
     <form id="chat-form">
       <input id="message-input" name="message" autocomplete="off" placeholder="Say something to Briar..." required>
       <button id="send-button" type="submit">Send</button>
     </form>
   </main>
+
   <script>
     const form = document.getElementById('chat-form');
     const input = document.getElementById('message-input');
@@ -162,15 +233,74 @@ FRONTEND_HTML = """<!doctype html>
     const log = document.getElementById('chat-log');
     const status = document.getElementById('status');
     const player = document.getElementById('player');
+    const portrait = document.getElementById('briar-portrait');
+    const portraitFrame = document.getElementById('portrait-frame');
+
+    const visemeBasePath = '/static/visemes';
+    const idleViseme = `${visemeBasePath}/briar_idle.png`;
+
+    const speakingVisemes = [
+      'briar_a.png',
+      'briar_a.png',
+      'briar_a.png',
+      'briar_e.png',
+      'briar_e.png',
+      'briar_e.png',
+      'briar_open.png',
+      'briar_o.png',
+    ];
+
+    let lipSyncTimer = null;
+
+    function setPortrait(src) {
+      portraitFrame.classList.remove('missing');
+      portrait.src = src;
+    }
+
+    function chooseSpeakingViseme() {
+      const filename = speakingVisemes[Math.floor(Math.random() * speakingVisemes.length)];
+      return `${visemeBasePath}/${filename}`;
+    }
+
+    function stopLipSync() {
+      if (lipSyncTimer) {
+        clearTimeout(lipSyncTimer);
+        lipSyncTimer = null;
+      }
+      setPortrait(idleViseme);
+    }
+
+    function scheduleLipSyncFrame() {
+      setPortrait(chooseSpeakingViseme());
+      const nextDelayMs = 90 + Math.floor(Math.random() * 41);
+      lipSyncTimer = setTimeout(scheduleLipSyncFrame, nextDelayMs);
+    }
+
+    function startLipSync() {
+      if (lipSyncTimer) return;
+      scheduleLipSyncFrame();
+    }
+
+    portrait.addEventListener('error', () => {
+      portraitFrame.classList.add('missing');
+    });
+
+    player.addEventListener('play', startLipSync);
+    player.addEventListener('pause', stopLipSync);
+    player.addEventListener('ended', stopLipSync);
+    player.addEventListener('error', stopLipSync);
 
     function addMessage(role, text) {
       const message = document.createElement('article');
       message.className = `message ${role}`;
+
       const label = document.createElement('span');
       label.className = 'meta';
       label.textContent = role === 'user' ? 'You' : 'Briar';
+
       const body = document.createElement('span');
       body.textContent = text;
+
       message.append(label, body);
       log.appendChild(message);
       log.scrollTop = log.scrollHeight;
@@ -183,6 +313,7 @@ FRONTEND_HTML = """<!doctype html>
 
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
+
       const message = input.value.trim();
       if (!message) return;
 
@@ -208,6 +339,7 @@ FRONTEND_HTML = """<!doctype html>
         addMessage('briar', payload.reply || '');
 
         if (payload.audio_url) {
+          stopLipSync();
           player.src = payload.audio_url;
           await player.play().catch(() => undefined);
         }
@@ -232,6 +364,8 @@ app = FastAPI(
     version="0.1.0",
     description="A small API surface for submitting chat and text-to-speech jobs.",
 )
+
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 class TTSRequest(BaseModel):
@@ -277,9 +411,15 @@ def load_workflow(workflow_path: Path | None = None) -> dict[str, Any]:
         with workflow_path.open("r", encoding="utf-8") as workflow_file:
             workflow = json.load(workflow_file)
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=500, detail=f"Workflow file not found: {workflow_path}") from exc
+        raise HTTPException(
+            status_code=500,
+            detail=f"Workflow file not found: {workflow_path}",
+        ) from exc
     except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=500, detail=f"Workflow file is not valid JSON: {workflow_path}") from exc
+        raise HTTPException(
+            status_code=500,
+            detail=f"Workflow file is not valid JSON: {workflow_path}",
+        ) from exc
 
     if not isinstance(workflow, dict):
         raise HTTPException(status_code=500, detail="Workflow JSON must be an object.")
@@ -371,7 +511,10 @@ def read_json_from_comfyui(request: Request, timeout: int = 30) -> dict[str, Any
         raise ComfyUIError(str(exc)) from exc
 
 
-def submit_prompt_to_comfyui(workflow: dict[str, Any], prompt_url: str = COMFYUI_PROMPT_URL) -> str:
+def submit_prompt_to_comfyui(
+    workflow: dict[str, Any],
+    prompt_url: str = COMFYUI_PROMPT_URL,
+) -> str:
     request_body = json.dumps({"prompt": workflow}).encode("utf-8")
     request = Request(
         prompt_url,
