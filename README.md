@@ -49,13 +49,9 @@ Start the development server with Python's module runner so the command works co
 python -m uvicorn app.main:app --reload
 ```
 
-The service and local web chat frontend will be available at <http://127.0.0.1:8000>.
+The service will be available at <http://127.0.0.1:8000>.
 
 ## Endpoints
-
-### `GET /`
-
-Serves a simple local web frontend with a chat log, message input, loading/error states, and automatic playback for audio returned by `POST /chat`.
 
 ### `GET /health`
 
