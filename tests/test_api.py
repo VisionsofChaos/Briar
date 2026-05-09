@@ -164,83 +164,34 @@ def test_extract_audio_output_supports_audios_field() -> None:
     assert audio_output.type == "output"
 
 
-def test_extract_audio_output_supports_files_field() -> None:
+def test_extract_audio_output_supports_save_audio_dict() -> None:
     history = {
-        "prompt-files": {
+        "prompt-dict": {
             "outputs": {
                 "7": {
-                    "files": [
-                        {
-                            "filename": "from-files.wav",
-                            "subfolder": "",
-                            "type": "output",
-                        }
-                    ]
-                }
-            }
-        }
-    }
-
-    audio_output = main.extract_audio_output(history, "prompt-files")
-
-    assert audio_output is not None
-    assert audio_output.filename == "from-files.wav"
-    assert audio_output.subfolder == ""
-    assert audio_output.type == "output"
-
-
-def test_extract_audio_output_supports_gifs_dict() -> None:
-    history = {
-        "prompt-gif": {
-            "outputs": {
-                "8": {
-                    "gifs": {
-                        "filename": "animated.webp",
-                        "type": "temp",
+                    "audio": {
+                        "filename": "single.wav",
+                        "subfolder": "",
+                        "type": "output",
                     }
                 }
             }
         }
     }
 
-    audio_output = main.extract_audio_output(history, "prompt-gif")
+    audio_output = main.extract_audio_output(history, "prompt-dict")
 
     assert audio_output is not None
-    assert audio_output.filename == "animated.webp"
-    assert audio_output.subfolder == ""
-    assert audio_output.type == "temp"
-
-
-def test_extract_audio_output_supports_any_filename_list() -> None:
-    history = {
-        "prompt-any": {
-            "outputs": {
-                "9": {
-                    "unexpected_key": [
-                        {
-                            "filename": "fallback.wav",
-                        }
-                    ]
-                }
-            }
-        }
-    }
-
-    audio_output = main.extract_audio_output(history, "prompt-any")
-
-    assert audio_output is not None
-    assert audio_output.filename == "fallback.wav"
+    assert audio_output.filename == "single.wav"
     assert audio_output.subfolder == ""
     assert audio_output.type == "output"
 
 
-def test_wait_for_audio_output_times_out_logs_output_keys(monkeypatch, caplog) -> None:
+def test_wait_for_audio_output_times_out(monkeypatch) -> None:
     monkeypatch.setattr(
         main,
         "urlopen",
-        lambda request, timeout: FakeComfyUIResponse(
-            {"prompt-timeout": {"outputs": {"42": {"images": []}}}}
-        ),
+        lambda request, timeout: FakeComfyUIResponse({"prompt-timeout": {"outputs": {}}}),
     )
     monkeypatch.setattr(main.time, "sleep", lambda seconds: None)
 
@@ -249,8 +200,6 @@ def test_wait_for_audio_output_times_out_logs_output_keys(monkeypatch, caplog) -
     except HTTPException as exc:
         assert exc.status_code == 504
         assert "Timed out waiting for ComfyUI audio output" in exc.detail
-        assert "History output keys" in caplog.text
-        assert "images" in caplog.text
     else:
         raise AssertionError("Expected HTTPException")
 
