@@ -20,17 +20,23 @@ COMFYUI_BASE_URL = "http://127.0.0.1:8188"
 COMFYUI_PROMPT_URL = f"{COMFYUI_BASE_URL}/prompt"
 LM_STUDIO_CHAT_URL = "http://127.0.0.1:50123/v1/chat/completions"
 LM_STUDIO_MODEL = "qwen2.5-14b"
+
 BRIAR_SYSTEM_PROMPT = (
-    "You are Briar. You are calm, emotionally intelligent, witty, warm, and "
-    "grounded. You speak naturally and conversationally. Do not mention being an "
-    "AI, a model, an assistant, or roleplaying. Do not output reasoning or "
-    "chain-of-thought. Reply naturally."
+    "You are Briar. You are calm, emotionally intelligent, witty, warm, and grounded. "
+    "You speak naturally and conversationally. Do not mention being an AI, a model, "
+    "an assistant, or roleplaying. Do not output reasoning or chain-of-thought. "
+    "Reply naturally. Keep replies to 1-2 short sentences unless the user asks for depth."
 )
-DEFAULT_HISTORY_TIMEOUT_SECONDS = 120
+
+DEFAULT_HISTORY_TIMEOUT_SECONDS = 300
 POLL_INTERVAL_SECONDS = 1
-WORKFLOW_PATH = Path(__file__).resolve().parent.parent / "workflows" / "qwen3_tts.json"
-STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+TTS_MAX_NEW_TOKENS = 512
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+WORKFLOW_PATH = ROOT_DIR / "workflows" / "qwen3_tts.json"
+STATIC_DIR = ROOT_DIR / "static"
 TARGET_TEXT_FIELDS = ("target_text", "text", "prompt")
+
 logger = logging.getLogger(__name__)
 
 FRONTEND_HTML = """<!doctype html>
@@ -75,7 +81,7 @@ FRONTEND_HTML = """<!doctype html>
       flex: 1;
       min-height: 0;
       display: grid;
-      grid-template-columns: minmax(180px, 280px) 1fr;
+      grid-template-columns: minmax(220px, 320px) 1fr;
       gap: 1rem;
       align-items: stretch;
     }
@@ -91,7 +97,7 @@ FRONTEND_HTML = """<!doctype html>
       border: 1px solid rgba(255, 255, 255, 0.08);
     }
     .portrait-frame {
-      width: min(220px, 100%);
+      width: min(280px, 100%);
       aspect-ratio: 1 / 1;
       display: grid;
       place-items: center;
@@ -146,7 +152,13 @@ FRONTEND_HTML = """<!doctype html>
       border: 1px solid rgba(255, 255, 255, 0.08);
       border-bottom-left-radius: 4px;
     }
-    .meta { display: block; margin-bottom: 0.2rem; font-size: 0.8rem; opacity: 0.72; font-weight: 700; }
+    .meta {
+      display: block;
+      margin-bottom: 0.2rem;
+      font-size: 0.8rem;
+      opacity: 0.72;
+      font-weight: 700;
+    }
     form { display: flex; gap: 0.75rem; }
     input {
       flex: 1;
@@ -159,7 +171,10 @@ FRONTEND_HTML = """<!doctype html>
       font: inherit;
       outline: none;
     }
-    input:focus { border-color: #b8e68e; box-shadow: 0 0 0 3px rgba(184, 230, 142, 0.16); }
+    input:focus {
+      border-color: #b8e68e;
+      box-shadow: 0 0 0 3px rgba(184, 230, 142, 0.16);
+    }
     button {
       padding: 0.9rem 1.25rem;
       border: 0;
@@ -190,6 +205,7 @@ FRONTEND_HTML = """<!doctype html>
       <h1>Briar</h1>
       <p>A local voice chat for warm, grounded replies.</p>
     </header>
+
     <div class="stage">
       <aside class="portrait-card" aria-label="Briar portrait">
         <div id="portrait-frame" class="portrait-frame">
@@ -198,15 +214,19 @@ FRONTEND_HTML = """<!doctype html>
         </div>
         <p class="portrait-caption">Briar is listening.</p>
       </aside>
+
       <section id="chat-log" aria-live="polite" aria-label="Chat log"></section>
     </div>
+
     <div id="status" role="status"></div>
     <audio id="player" controls></audio>
+
     <form id="chat-form">
       <input id="message-input" name="message" autocomplete="off" placeholder="Say something to Briar..." required>
       <button id="send-button" type="submit">Send</button>
     </form>
   </main>
+
   <script>
     const form = document.getElementById('chat-form');
     const input = document.getElementById('message-input');
@@ -216,6 +236,7 @@ FRONTEND_HTML = """<!doctype html>
     const player = document.getElementById('player');
     const portrait = document.getElementById('briar-portrait');
     const portraitFrame = document.getElementById('portrait-frame');
+
     const visemeBasePath = '/static/visemes';
     const spriteMap = {
       idle: { normal: 'briar_idle.png', blink: 'briar_idle_blink.png' },
@@ -224,8 +245,10 @@ FRONTEND_HTML = """<!doctype html>
       open: { normal: 'briar_open.png', blink: 'briar_open_blink.png' },
       o: { normal: 'briar_o.png', blink: 'briar_o_blink.png' },
     };
+
     const weightedMouths = ['a', 'a', 'a', 'e', 'e', 'e', 'open', 'o'];
     const failedSprites = new Set();
+
     let currentMouth = 'idle';
     let isBlinking = false;
     let lipSyncTimer = null;
@@ -250,9 +273,11 @@ FRONTEND_HTML = """<!doctype html>
     function updateBriarSprite() {
       const sprites = spriteMap[currentMouth] || spriteMap.idle;
       let filename = isBlinking ? sprites.blink : sprites.normal;
+
       if (isBlinking && failedSprites.has(filename)) {
         filename = sprites.normal;
       }
+
       const nextSrc = spriteUrl(filename);
       if (portrait.getAttribute('src') !== nextSrc) {
         currentSpriteSrc = nextSrc;
@@ -277,6 +302,7 @@ FRONTEND_HTML = """<!doctype html>
     function scheduleLipSyncFrame() {
       currentMouth = chooseSpeakingMouth();
       updateBriarSprite();
+
       const nextDelayMs = 90 + Math.floor(Math.random() * 41);
       lipSyncTimer = setTimeout(scheduleLipSyncFrame, nextDelayMs);
     }
@@ -287,10 +313,15 @@ FRONTEND_HTML = """<!doctype html>
     }
 
     function scheduleNextBlink() {
+      if (blinkTimer) {
+        clearTimeout(blinkTimer);
+      }
+
       const nextBlinkDelayMs = 3000 + Math.floor(Math.random() * 4001);
       blinkTimer = setTimeout(() => {
         isBlinking = true;
         updateBriarSprite();
+
         const blinkDurationMs = 90 + Math.floor(Math.random() * 41);
         blinkEndTimer = setTimeout(() => {
           isBlinking = false;
@@ -302,16 +333,23 @@ FRONTEND_HTML = """<!doctype html>
 
     portrait.addEventListener('error', () => {
       const failedFilename = currentSpriteSrc.split('/').pop();
-      failedSprites.add(failedFilename);
+      if (failedFilename) {
+        failedSprites.add(failedFilename);
+      }
+
       if (failedFilename && failedFilename.includes('_blink')) {
+        isBlinking = false;
         updateBriarSprite();
         return;
       }
+
       portraitFrame.classList.add('missing');
     });
+
     preloadSprites();
     updateBriarSprite();
     scheduleNextBlink();
+
     player.addEventListener('play', startLipSync);
     player.addEventListener('pause', stopLipSync);
     player.addEventListener('ended', stopLipSync);
@@ -320,11 +358,14 @@ FRONTEND_HTML = """<!doctype html>
     function addMessage(role, text) {
       const message = document.createElement('article');
       message.className = `message ${role}`;
+
       const label = document.createElement('span');
       label.className = 'meta';
       label.textContent = role === 'user' ? 'You' : 'Briar';
+
       const body = document.createElement('span');
       body.textContent = text;
+
       message.append(label, body);
       log.appendChild(message);
       log.scrollTop = log.scrollHeight;
@@ -337,6 +378,7 @@ FRONTEND_HTML = """<!doctype html>
 
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
+
       const message = input.value.trim();
       if (!message) return;
 
@@ -352,17 +394,21 @@ FRONTEND_HTML = """<!doctype html>
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ message }),
         });
+
         const payload = await response.json().catch(() => ({}));
+
         if (!response.ok) {
           throw new Error(payload.detail || `Request failed with HTTP ${response.status}`);
         }
 
         addMessage('briar', payload.reply || '');
+
         if (payload.audio_url) {
           stopLipSync();
           player.src = payload.audio_url;
           await player.play().catch(() => undefined);
         }
+
         setStatus('');
       } catch (error) {
         setStatus(error instanceof Error ? error.message : String(error), true);
@@ -377,23 +423,21 @@ FRONTEND_HTML = """<!doctype html>
 </html>
 """
 
+
 app = FastAPI(
     title="Briar TTS Service",
     version="0.1.0",
-    description="A small API surface for submitting text-to-speech jobs to ComfyUI.",
+    description="A small API surface for submitting chat and text-to-speech jobs.",
 )
+
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 class TTSRequest(BaseModel):
-    """Request body for text-to-speech generation."""
-
     text: str = Field(..., min_length=1, description="Text to synthesize.")
 
 
 class TTSResponse(BaseModel):
-    """Response returned after ComfyUI finishes generating audio."""
-
     prompt_id: str
     filename: str
     subfolder: str
@@ -402,37 +446,29 @@ class TTSResponse(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    """Request body for chat plus text-to-speech generation."""
-
     message: str = Field(..., min_length=1, description="Message to send to Briar.")
 
 
 class ChatResponse(TTSResponse):
-    """Response returned after chat completion and TTS generation."""
-
     message: str
     reply: str
 
 
 class AudioOutput(BaseModel):
-    """Generated audio location returned by ComfyUI history."""
-
     filename: str
     subfolder: str = ""
     type: str = "output"
 
 
 class ComfyUIError(RuntimeError):
-    """Raised when ComfyUI does not return the expected response."""
+    pass
 
 
 class LMStudioError(RuntimeError):
-    """Raised when LM Studio does not return the expected response."""
+    pass
 
 
 def load_workflow(workflow_path: Path | None = None) -> dict[str, Any]:
-    """Load a ComfyUI API-format workflow from disk."""
-
     if workflow_path is None:
         workflow_path = WORKFLOW_PATH
 
@@ -457,8 +493,6 @@ def load_workflow(workflow_path: Path | None = None) -> dict[str, Any]:
 
 
 def node_matches_qwen3_voice_clone(node: dict[str, Any]) -> bool:
-    """Return whether a ComfyUI node appears to be a Qwen3-TTS VoiceClone node."""
-
     metadata = node.get("_meta")
     title = metadata.get("title", "") if isinstance(metadata, dict) else ""
     searchable_values = (node.get("class_type", ""), node.get("title", ""), title)
@@ -469,8 +503,6 @@ def node_matches_qwen3_voice_clone(node: dict[str, Any]) -> bool:
 
 
 def replace_qwen3_target_text(workflow: dict[str, Any], text: str) -> dict[str, Any]:
-    """Return a workflow copy with the Qwen3-TTS VoiceClone target text replaced."""
-
     updated_workflow = copy.deepcopy(workflow)
 
     for node in updated_workflow.values():
@@ -487,6 +519,10 @@ def replace_qwen3_target_text(workflow: dict[str, Any], text: str) -> dict[str, 
         for field_name in TARGET_TEXT_FIELDS:
             if field_name in inputs:
                 inputs[field_name] = text
+
+                if "max_new_tokens" in inputs:
+                    inputs["max_new_tokens"] = TTS_MAX_NEW_TOKENS
+
                 return updated_workflow
 
         raise HTTPException(
@@ -503,9 +539,7 @@ def replace_qwen3_target_text(workflow: dict[str, Any], text: str) -> dict[str, 
     )
 
 
-def read_json_from_comfyui(request: Request, timeout: int = 30) -> dict[str, Any]:
-    """Send a request to ComfyUI and return a JSON object response."""
-
+def read_json_request(request: Request, service_name: str, timeout: int = 30) -> dict[str, Any]:
     try:
         with urlopen(request, timeout=timeout) as response:
             response_body = response.read().decode("utf-8")
@@ -513,30 +547,36 @@ def read_json_from_comfyui(request: Request, timeout: int = 30) -> dict[str, Any
         detail = exc.read().decode("utf-8", errors="replace")
         raise HTTPException(
             status_code=502,
-            detail=f"ComfyUI returned HTTP {exc.code}: {detail}",
+            detail=f"{service_name} returned HTTP {exc.code}: {detail}",
         ) from exc
     except URLError as exc:
         raise HTTPException(
             status_code=502,
-            detail=f"Could not connect to ComfyUI at {request.full_url}: {exc.reason}",
+            detail=f"Could not connect to {service_name} at {request.full_url}: {exc.reason}",
         ) from exc
 
     try:
         response_json = json.loads(response_body)
     except json.JSONDecodeError as exc:
-        raise ComfyUIError("ComfyUI returned a non-JSON response.") from exc
+        raise RuntimeError(f"{service_name} returned a non-JSON response.") from exc
 
     if not isinstance(response_json, dict):
-        raise ComfyUIError("ComfyUI returned JSON that was not an object.")
+        raise RuntimeError(f"{service_name} returned JSON that was not an object.")
 
     return response_json
 
 
-def submit_prompt_to_comfyui(
-    workflow: dict[str, Any], prompt_url: str = COMFYUI_PROMPT_URL
-) -> str:
-    """Submit a ComfyUI workflow and return the accepted prompt id."""
+def read_json_from_comfyui(request: Request, timeout: int = 30) -> dict[str, Any]:
+    try:
+        return read_json_request(request, "ComfyUI", timeout)
+    except RuntimeError as exc:
+        raise ComfyUIError(str(exc)) from exc
 
+
+def submit_prompt_to_comfyui(
+    workflow: dict[str, Any],
+    prompt_url: str = COMFYUI_PROMPT_URL,
+) -> str:
     request_body = json.dumps({"prompt": workflow}).encode("utf-8")
     request = Request(
         prompt_url,
@@ -553,11 +593,7 @@ def submit_prompt_to_comfyui(
     return prompt_id
 
 
-def request_chat_completion(
-    message: str, chat_url: str = LM_STUDIO_CHAT_URL
-) -> str:
-    """Send a user message to LM Studio and return the assistant reply text."""
-
+def request_chat_completion(message: str, chat_url: str = LM_STUDIO_CHAT_URL) -> str:
     request_body = json.dumps(
         {
             "model": LM_STUDIO_MODEL,
@@ -566,8 +602,10 @@ def request_chat_completion(
                 {"role": "user", "content": message},
             ],
             "temperature": 0.8,
+            "max_tokens": 80,
         }
     ).encode("utf-8")
+
     request = Request(
         chat_url,
         data=request_body,
@@ -576,27 +614,9 @@ def request_chat_completion(
     )
 
     try:
-        with urlopen(request, timeout=60) as response:
-            response_body = response.read().decode("utf-8")
-    except HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise HTTPException(
-            status_code=502,
-            detail=f"LM Studio returned HTTP {exc.code}: {detail}",
-        ) from exc
-    except URLError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Could not connect to LM Studio at {chat_url}: {exc.reason}",
-        ) from exc
-
-    try:
-        response_json = json.loads(response_body)
-    except json.JSONDecodeError as exc:
-        raise LMStudioError("LM Studio returned a non-JSON response.") from exc
-
-    if not isinstance(response_json, dict):
-        raise LMStudioError("LM Studio returned JSON that was not an object.")
+        response_json = read_json_request(request, "LM Studio", timeout=60)
+    except RuntimeError as exc:
+        raise LMStudioError(str(exc)) from exc
 
     choices = response_json.get("choices")
     if not isinstance(choices, list) or not choices:
@@ -618,14 +638,13 @@ def request_chat_completion(
 
 
 def audio_output_from_item(audio_item: dict[str, Any]) -> AudioOutput | None:
-    """Build an audio output model from one ComfyUI Save Audio item."""
-
     filename = audio_item.get("filename")
     if not isinstance(filename, str) or not filename:
         return None
 
     subfolder = audio_item.get("subfolder", "")
     audio_type = audio_item.get("type", "output")
+
     return AudioOutput(
         filename=filename,
         subfolder=subfolder if isinstance(subfolder, str) else "",
@@ -634,8 +653,6 @@ def audio_output_from_item(audio_item: dict[str, Any]) -> AudioOutput | None:
 
 
 def iter_save_audio_items(value: Any) -> list[dict[str, Any]]:
-    """Recursively return dicts containing filenames from ComfyUI history output."""
-
     if isinstance(value, dict):
         items = [value] if isinstance(value.get("filename"), str) and value["filename"] else []
         for nested_value in value.values():
@@ -652,8 +669,6 @@ def iter_save_audio_items(value: Any) -> list[dict[str, Any]]:
 
 
 def history_debug_details(history: dict[str, Any], prompt_id: str) -> dict[str, Any]:
-    """Return ComfyUI history structure details for timeout debugging."""
-
     prompt_history = history.get(prompt_id)
     outputs = prompt_history.get("outputs") if isinstance(prompt_history, dict) else None
 
@@ -674,8 +689,6 @@ def history_debug_details(history: dict[str, Any], prompt_id: str) -> dict[str, 
 
 
 def extract_audio_output(history: dict[str, Any], prompt_id: str) -> AudioOutput | None:
-    """Extract the first generated audio/file output from ComfyUI history."""
-
     prompt_history = history.get(prompt_id)
     if not isinstance(prompt_history, dict):
         return None
@@ -699,8 +712,6 @@ def wait_for_audio_output(
     poll_interval_seconds: int = POLL_INTERVAL_SECONDS,
     base_url: str = COMFYUI_BASE_URL,
 ) -> AudioOutput:
-    """Poll ComfyUI history until an audio output appears or timeout expires."""
-
     history_url = f"{base_url}/history/{prompt_id}"
     deadline = time.monotonic() + timeout_seconds
     last_history: dict[str, Any] = {}
@@ -709,6 +720,7 @@ def wait_for_audio_output(
         request = Request(history_url, method="GET")
         history = read_json_from_comfyui(request)
         last_history = history
+
         audio_output = extract_audio_output(history, prompt_id)
         if audio_output is not None:
             return audio_output
@@ -735,8 +747,6 @@ def wait_for_audio_output(
 
 
 def build_audio_url(audio_output: AudioOutput, base_url: str = COMFYUI_BASE_URL) -> str:
-    """Build the ComfyUI /view URL for a generated audio output."""
-
     query = urlencode(
         {
             "filename": audio_output.filename,
@@ -747,25 +757,10 @@ def build_audio_url(audio_output: AudioOutput, base_url: str = COMFYUI_BASE_URL)
     return f"{base_url}/view?{query}"
 
 
-@app.get("/", response_class=HTMLResponse, tags=["frontend"])
-def home() -> HTMLResponse:
-    """Serve the local Briar chat frontend."""
-
-    return HTMLResponse(FRONTEND_HTML)
-
-
-@app.get("/health", tags=["health"])
-def health() -> dict[str, str]:
-    """Return a simple health check response."""
-
-    return {"status": "ok"}
-
-
 def synthesize_text(text: str) -> TTSResponse:
-    """Run the configured ComfyUI TTS workflow for text and return audio details."""
-
     workflow = load_workflow()
     updated_workflow = replace_qwen3_target_text(workflow, text)
+
     prompt_id = submit_prompt_to_comfyui(updated_workflow)
     audio_output = wait_for_audio_output(prompt_id)
 
@@ -778,10 +773,18 @@ def synthesize_text(text: str) -> TTSResponse:
     )
 
 
+@app.get("/", response_class=HTMLResponse, tags=["frontend"])
+def home() -> HTMLResponse:
+    return HTMLResponse(FRONTEND_HTML)
+
+
+@app.get("/health", tags=["health"])
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
 @app.post("/tts", response_model=TTSResponse, tags=["tts"])
 def create_tts(request: TTSRequest) -> TTSResponse:
-    """Submit the Qwen3-TTS workflow to ComfyUI and return generated audio details."""
-
     try:
         return synthesize_text(request.text)
     except ComfyUIError as exc:
@@ -790,8 +793,6 @@ def create_tts(request: TTSRequest) -> TTSResponse:
 
 @app.post("/chat", response_model=ChatResponse, tags=["chat"])
 def create_chat(request: ChatRequest) -> ChatResponse:
-    """Generate a Briar chat reply and synthesize it with the TTS workflow."""
-
     try:
         reply = request_chat_completion(request.message)
         tts_response = synthesize_text(reply)
