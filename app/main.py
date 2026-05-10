@@ -2,6 +2,7 @@
 
 import copy
 import json
+import logging
 import time
 from pathlib import Path
 from typing import Any
@@ -17,7 +18,6 @@ from pydantic import BaseModel, Field
 
 COMFYUI_BASE_URL = "http://127.0.0.1:8188"
 COMFYUI_PROMPT_URL = f"{COMFYUI_BASE_URL}/prompt"
-
 LM_STUDIO_CHAT_URL = "http://127.0.0.1:50123/v1/chat/completions"
 LM_STUDIO_MODEL = "qwen2.5-14b"
 
@@ -37,6 +37,7 @@ WORKFLOW_PATH = ROOT_DIR / "workflows" / "qwen3_tts.json"
 STATIC_DIR = ROOT_DIR / "static"
 TARGET_TEXT_FIELDS = ("target_text", "text", "prompt")
 
+logger = logging.getLogger(__name__)
 
 FRONTEND_HTML = """<!doctype html>
 <html lang="en">
@@ -237,29 +238,56 @@ FRONTEND_HTML = """<!doctype html>
     const portraitFrame = document.getElementById('portrait-frame');
 
     const visemeBasePath = '/static/visemes';
-    const idleViseme = `${visemeBasePath}/briar_idle.png`;
+    const spriteMap = {
+      idle: { normal: 'briar_idle.png', blink: 'briar_idle_blink.png' },
+      e: { normal: 'briar_e.png', blink: 'briar_e_blink.png' },
+      a: { normal: 'briar_a.png', blink: 'briar_a_blink.png' },
+      open: { normal: 'briar_open.png', blink: 'briar_open_blink.png' },
+      o: { normal: 'briar_o.png', blink: 'briar_o_blink.png' },
+    };
 
-    const speakingVisemes = [
-      'briar_a.png',
-      'briar_a.png',
-      'briar_a.png',
-      'briar_e.png',
-      'briar_e.png',
-      'briar_e.png',
-      'briar_open.png',
-      'briar_o.png',
-    ];
+    const weightedMouths = ['a', 'a', 'a', 'e', 'e', 'e', 'open', 'o'];
+    const failedSprites = new Set();
 
+    let currentMouth = 'idle';
+    let isBlinking = false;
     let lipSyncTimer = null;
+    let blinkTimer = null;
+    let blinkEndTimer = null;
+    let currentSpriteSrc = '';
 
-    function setPortrait(src) {
-      portraitFrame.classList.remove('missing');
-      portrait.src = src;
+    function spriteUrl(filename) {
+      return `${visemeBasePath}/${filename}`;
     }
 
-    function chooseSpeakingViseme() {
-      const filename = speakingVisemes[Math.floor(Math.random() * speakingVisemes.length)];
-      return `${visemeBasePath}/${filename}`;
+    function preloadSprites() {
+      Object.values(spriteMap).forEach((sprites) => {
+        Object.values(sprites).forEach((filename) => {
+          const image = new Image();
+          image.addEventListener('error', () => failedSprites.add(filename));
+          image.src = spriteUrl(filename);
+        });
+      });
+    }
+
+    function updateBriarSprite() {
+      const sprites = spriteMap[currentMouth] || spriteMap.idle;
+      let filename = isBlinking ? sprites.blink : sprites.normal;
+
+      if (isBlinking && failedSprites.has(filename)) {
+        filename = sprites.normal;
+      }
+
+      const nextSrc = spriteUrl(filename);
+      if (portrait.getAttribute('src') !== nextSrc) {
+        currentSpriteSrc = nextSrc;
+        portraitFrame.classList.remove('missing');
+        portrait.src = nextSrc;
+      }
+    }
+
+    function chooseSpeakingMouth() {
+      return weightedMouths[Math.floor(Math.random() * weightedMouths.length)];
     }
 
     function stopLipSync() {
@@ -267,11 +295,14 @@ FRONTEND_HTML = """<!doctype html>
         clearTimeout(lipSyncTimer);
         lipSyncTimer = null;
       }
-      setPortrait(idleViseme);
+      currentMouth = 'idle';
+      updateBriarSprite();
     }
 
     function scheduleLipSyncFrame() {
-      setPortrait(chooseSpeakingViseme());
+      currentMouth = chooseSpeakingMouth();
+      updateBriarSprite();
+
       const nextDelayMs = 90 + Math.floor(Math.random() * 41);
       lipSyncTimer = setTimeout(scheduleLipSyncFrame, nextDelayMs);
     }
@@ -281,9 +312,43 @@ FRONTEND_HTML = """<!doctype html>
       scheduleLipSyncFrame();
     }
 
+    function scheduleNextBlink() {
+      if (blinkTimer) {
+        clearTimeout(blinkTimer);
+      }
+
+      const nextBlinkDelayMs = 3000 + Math.floor(Math.random() * 4001);
+      blinkTimer = setTimeout(() => {
+        isBlinking = true;
+        updateBriarSprite();
+
+        const blinkDurationMs = 90 + Math.floor(Math.random() * 41);
+        blinkEndTimer = setTimeout(() => {
+          isBlinking = false;
+          updateBriarSprite();
+          scheduleNextBlink();
+        }, blinkDurationMs);
+      }, nextBlinkDelayMs);
+    }
+
     portrait.addEventListener('error', () => {
+      const failedFilename = currentSpriteSrc.split('/').pop();
+      if (failedFilename) {
+        failedSprites.add(failedFilename);
+      }
+
+      if (failedFilename && failedFilename.includes('_blink')) {
+        isBlinking = false;
+        updateBriarSprite();
+        return;
+      }
+
       portraitFrame.classList.add('missing');
     });
+
+    preloadSprites();
+    updateBriarSprite();
+    scheduleNextBlink();
 
     player.addEventListener('play', startLipSync);
     player.addEventListener('pause', stopLipSync);
@@ -433,6 +498,7 @@ def node_matches_qwen3_voice_clone(node: dict[str, Any]) -> bool:
     searchable_values = (node.get("class_type", ""), node.get("title", ""), title)
     searchable_text = " ".join(str(value).lower() for value in searchable_values)
     compact_text = searchable_text.replace("-", "").replace("_", "").replace(" ", "")
+
     return "qwen3" in compact_text and "voiceclone" in compact_text
 
 
@@ -450,26 +516,22 @@ def replace_qwen3_target_text(workflow: dict[str, Any], text: str) -> dict[str, 
                 detail="Qwen3-TTS VoiceClone node does not contain an inputs object.",
             )
 
-        did_replace_text = False
         for field_name in TARGET_TEXT_FIELDS:
             if field_name in inputs:
                 inputs[field_name] = text
-                did_replace_text = True
-                break
 
-        if not did_replace_text:
-            raise HTTPException(
-                status_code=500,
-                detail=(
-                    "Qwen3-TTS VoiceClone node is missing a target text input field. "
-                    f"Expected one of: {', '.join(TARGET_TEXT_FIELDS)}."
-                ),
-            )
+                if "max_new_tokens" in inputs:
+                    inputs["max_new_tokens"] = TTS_MAX_NEW_TOKENS
 
-        if "max_new_tokens" in inputs:
-            inputs["max_new_tokens"] = TTS_MAX_NEW_TOKENS
+                return updated_workflow
 
-        return updated_workflow
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Qwen3-TTS VoiceClone node is missing a target text input field. "
+                f"Expected one of: {', '.join(TARGET_TEXT_FIELDS)}."
+            ),
+        )
 
     raise HTTPException(
         status_code=500,
@@ -606,6 +668,26 @@ def iter_save_audio_items(value: Any) -> list[dict[str, Any]]:
     return []
 
 
+def history_debug_details(history: dict[str, Any], prompt_id: str) -> dict[str, Any]:
+    prompt_history = history.get(prompt_id)
+    outputs = prompt_history.get("outputs") if isinstance(prompt_history, dict) else None
+
+    output_keys_by_node: dict[str, list[str]] = {}
+    if isinstance(outputs, dict):
+        output_keys_by_node = {
+            str(node_id): list(node_output.keys())
+            for node_id, node_output in outputs.items()
+            if isinstance(node_output, dict)
+        }
+
+    return {
+        "prompt_id": prompt_id,
+        "history_keys": list(history.keys()),
+        "output_node_ids": list(outputs.keys()) if isinstance(outputs, dict) else [],
+        "output_keys_by_node": output_keys_by_node,
+    }
+
+
 def extract_audio_output(history: dict[str, Any], prompt_id: str) -> AudioOutput | None:
     prompt_history = history.get(prompt_id)
     if not isinstance(prompt_history, dict):
@@ -632,16 +714,27 @@ def wait_for_audio_output(
 ) -> AudioOutput:
     history_url = f"{base_url}/history/{prompt_id}"
     deadline = time.monotonic() + timeout_seconds
+    last_history: dict[str, Any] = {}
 
     while True:
         request = Request(history_url, method="GET")
         history = read_json_from_comfyui(request)
-        audio_output = extract_audio_output(history, prompt_id)
+        last_history = history
 
+        audio_output = extract_audio_output(history, prompt_id)
         if audio_output is not None:
             return audio_output
 
         if time.monotonic() >= deadline:
+            debug_details = history_debug_details(last_history, prompt_id)
+            logger.warning(
+                "Timed out waiting for ComfyUI audio output. "
+                "prompt_id=%s history_keys=%s output_node_ids=%s output_keys_by_node=%s",
+                debug_details["prompt_id"],
+                debug_details["history_keys"],
+                debug_details["output_node_ids"],
+                debug_details["output_keys_by_node"],
+            )
             raise HTTPException(
                 status_code=504,
                 detail=(

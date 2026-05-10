@@ -32,7 +32,7 @@ Copy the Briar viseme images into `static\visemes` so the web frontend can serve
 Copy-Item "E:\Seagate 4TB(E Drive) DLs\E Drive Misc\BriarAI\Briar 2.0\briar_visemes\briar_*.png" .\static\visemes\
 ```
 
-The frontend expects `briar_idle.png`, `briar_a.png`, `briar_e.png`, `briar_open.png`, and `briar_o.png`. If an image is missing, the page falls back to a simple initial badge.
+The frontend expects `briar_idle.png`, `briar_idle_blink.png`, `briar_a.png`, `briar_a_blink.png`, `briar_e.png`, `briar_e_blink.png`, `briar_open.png`, `briar_open_blink.png`, `briar_o.png`, and `briar_o_blink.png`. If a blink image is missing, the page silently falls back to the matching non-blink image; if a base image is missing, it shows a simple initial badge.
 
 ## Run ComfyUI
 
