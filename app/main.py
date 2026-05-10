@@ -2,6 +2,7 @@
 
 import copy
 import json
+import logging
 import time
 from pathlib import Path
 from typing import Any
@@ -17,7 +18,6 @@ from pydantic import BaseModel, Field
 
 COMFYUI_BASE_URL = "http://127.0.0.1:8188"
 COMFYUI_PROMPT_URL = f"{COMFYUI_BASE_URL}/prompt"
-
 LM_STUDIO_CHAT_URL = "http://127.0.0.1:50123/v1/chat/completions"
 LM_STUDIO_MODEL = "qwen2.5-14b"
 
@@ -37,6 +37,8 @@ WORKFLOW_PATH = ROOT_DIR / "workflows" / "qwen3_tts.json"
 STATIC_DIR = ROOT_DIR / "static"
 TARGET_TEXT_FIELDS = ("target_text", "text", "prompt")
 
+logger = logging.getLogger(__name__)
+
 
 FRONTEND_HTML = """<!doctype html>
 <html lang="en">
@@ -48,153 +50,302 @@ FRONTEND_HTML = """<!doctype html>
     :root {
       color-scheme: dark;
       font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #11150f;
-      color: #f3f5ed;
+      background: #160f12;
+      color: #fff7ed;
+      --panel: rgba(35, 22, 25, 0.68);
+      --cream: #fff0d6;
+      --rose: #d9a0a8;
+      --rose-bright: #efc0c8;
+      --ink: #1a1013;
     }
+
     * { box-sizing: border-box; }
+
     body {
       margin: 0;
       min-height: 100vh;
       display: grid;
       place-items: center;
-      background:
-        radial-gradient(circle at top left, rgba(129, 180, 99, 0.22), transparent 32rem),
-        linear-gradient(135deg, #10150f 0%, #182016 100%);
+      overflow: hidden;
+      background-color: #170f13;
+      background-image:
+        linear-gradient(90deg, rgba(18, 9, 12, 0.48), rgba(18, 9, 12, 0.14) 48%, rgba(18, 9, 12, 0.72)),
+        radial-gradient(circle at 26% 28%, rgba(255, 220, 185, 0.20), transparent 24rem),
+        radial-gradient(circle at 80% 18%, rgba(202, 126, 139, 0.18), transparent 28rem),
+        url('/static/backgrounds/briar_room.png'),
+        linear-gradient(135deg, #1a1014 0%, #2b1820 48%, #120c10 100%);
+      background-size: cover, auto, auto, cover, cover;
+      background-position: center, center, center, center, center;
+      background-repeat: no-repeat;
     }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background: linear-gradient(180deg, rgba(255, 240, 214, 0.06), rgba(0, 0, 0, 0.20));
+      backdrop-filter: saturate(1.04);
+    }
+
     main {
-      width: min(1080px, calc(100vw - 2rem));
-      height: min(800px, calc(100vh - 2rem));
-      display: flex;
-      flex-direction: column;
-      gap: 1rem;
-      padding: 1.25rem;
-      border: 1px solid rgba(222, 232, 202, 0.14);
-      border-radius: 24px;
-      background: rgba(16, 21, 15, 0.82);
-      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.38);
-      backdrop-filter: blur(14px);
+      position: relative;
+      z-index: 1;
+      width: min(1180px, calc(100vw - 2rem));
+      height: min(820px, calc(100vh - 2rem));
+      display: grid;
+      grid-template-rows: auto 1fr auto auto auto;
+      gap: 0.85rem;
+      padding: clamp(1rem, 2vw, 1.45rem);
+      border: 1px solid rgba(255, 240, 214, 0.22);
+      border-radius: 30px;
+      background: linear-gradient(135deg, rgba(45, 28, 32, 0.50), rgba(18, 12, 15, 0.42));
+      box-shadow: 0 28px 90px rgba(0, 0, 0, 0.50), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+      backdrop-filter: blur(10px);
     }
-    header h1 { margin: 0; font-size: clamp(1.8rem, 4vw, 3rem); }
-    header p { margin: 0.35rem 0 0; color: #c3cfb3; }
+
+    header {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 0 0.25rem;
+    }
+
+    header h1 {
+      margin: 0;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(2.2rem, 5vw, 4.2rem);
+      line-height: 0.9;
+      letter-spacing: 0.03em;
+      color: var(--cream);
+      text-shadow: 0 4px 22px rgba(0, 0, 0, 0.55);
+    }
+
+    header p {
+      margin: 0.35rem 0 0;
+      color: rgba(255, 240, 214, 0.76);
+      max-width: 34rem;
+    }
+
     .stage {
-      flex: 1;
       min-height: 0;
       display: grid;
-      grid-template-columns: minmax(220px, 320px) 1fr;
-      gap: 1rem;
+      grid-template-columns: minmax(340px, 46%) minmax(340px, 1fr);
+      gap: clamp(1rem, 2.6vw, 2rem);
       align-items: stretch;
     }
+
     .portrait-card {
+      position: relative;
       display: flex;
       flex-direction: column;
       align-items: center;
-      justify-content: center;
-      gap: 0.8rem;
-      padding: 1rem;
-      border-radius: 18px;
-      background: rgba(0, 0, 0, 0.22);
-      border: 1px solid rgba(255, 255, 255, 0.08);
-    }
-    .portrait-frame {
-      width: min(280px, 100%);
-      aspect-ratio: 1 / 1;
-      display: grid;
-      place-items: center;
-      overflow: hidden;
+      justify-content: end;
+      min-height: 0;
+      padding: clamp(0.8rem, 1.6vw, 1.2rem);
       border-radius: 28px;
-      background: radial-gradient(circle at 50% 18%, rgba(184, 230, 142, 0.22), rgba(0, 0, 0, 0.22));
-      border: 1px solid rgba(222, 232, 202, 0.12);
+      background:
+        radial-gradient(circle at 50% 22%, rgba(255, 229, 205, 0.18), transparent 20rem),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.015));
+      border: 1px solid rgba(255, 240, 214, 0.16);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+      overflow: hidden;
     }
+
+    .portrait-card::after {
+      content: "";
+      position: absolute;
+      left: 10%;
+      right: 10%;
+      bottom: 1rem;
+      height: 20%;
+      border-radius: 50%;
+      background: radial-gradient(ellipse, rgba(0, 0, 0, 0.34), transparent 68%);
+      filter: blur(10px);
+      z-index: 0;
+    }
+
+    .portrait-frame {
+      position: relative;
+      z-index: 1;
+      width: min(430px, 100%);
+      height: 100%;
+      min-height: 390px;
+      display: grid;
+      place-items: end center;
+      overflow: visible;
+      border-radius: 0;
+      background: transparent;
+      border: 0;
+    }
+
     #briar-portrait {
-      width: 100%;
+      width: min(430px, 100%);
       height: 100%;
       object-fit: contain;
+      object-position: bottom center;
+      filter: drop-shadow(0 24px 32px rgba(0, 0, 0, 0.50));
     }
+
     .portrait-fallback {
       display: none;
-      width: 100%;
-      height: 100%;
+      width: min(300px, 80%);
+      aspect-ratio: 1 / 1;
       place-items: center;
-      font-size: clamp(4rem, 16vw, 7rem);
+      border-radius: 999px;
+      background: rgba(42, 25, 30, 0.74);
+      border: 1px solid rgba(255, 240, 214, 0.16);
+      font-size: clamp(4rem, 16vw, 8rem);
+      font-family: Georgia, "Times New Roman", serif;
       font-weight: 900;
-      color: #dcefc8;
+      color: var(--cream);
     }
+
     .portrait-frame.missing #briar-portrait { display: none; }
     .portrait-frame.missing .portrait-fallback { display: grid; }
-    .portrait-caption { margin: 0; color: #c3cfb3; text-align: center; }
+
+    .portrait-caption {
+      position: relative;
+      z-index: 1;
+      margin: 0.25rem 0 0;
+      padding: 0.45rem 0.85rem;
+      border-radius: 999px;
+      color: rgba(255, 240, 214, 0.78);
+      background: rgba(26, 16, 19, 0.42);
+      border: 1px solid rgba(255, 240, 214, 0.12);
+      text-align: center;
+      font-size: 0.95rem;
+    }
+
     #chat-log {
-      flex: 1;
+      min-height: 0;
       overflow-y: auto;
       display: flex;
       flex-direction: column;
       gap: 0.85rem;
-      padding: 1rem;
-      border-radius: 18px;
-      background: rgba(0, 0, 0, 0.22);
+      padding: clamp(1rem, 1.8vw, 1.25rem);
+      border-radius: 28px;
+      background: linear-gradient(180deg, rgba(36, 23, 27, 0.78), rgba(20, 13, 16, 0.70));
+      border: 1px solid rgba(255, 240, 214, 0.18);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 18px 48px rgba(0, 0, 0, 0.22);
+      backdrop-filter: blur(12px);
     }
+
+    #chat-log:empty::before {
+      content: "The room is quiet. Say hello to Briar.";
+      margin: auto;
+      color: rgba(255, 240, 214, 0.50);
+      text-align: center;
+      font-style: italic;
+    }
+
     .message {
-      max-width: 78%;
-      padding: 0.85rem 1rem;
-      border-radius: 16px;
-      line-height: 1.45;
+      max-width: 82%;
+      padding: 0.9rem 1rem;
+      border-radius: 18px;
+      line-height: 1.48;
       white-space: pre-wrap;
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
     }
+
     .message.user {
       align-self: flex-end;
-      background: #dcefc8;
-      color: #172012;
-      border-bottom-right-radius: 4px;
+      background: linear-gradient(135deg, #f4ddc5, #e7c0ba);
+      color: #2a171d;
+      border-bottom-right-radius: 5px;
     }
+
     .message.briar {
       align-self: flex-start;
-      background: rgba(255, 255, 255, 0.08);
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      border-bottom-left-radius: 4px;
+      background: rgba(255, 240, 214, 0.10);
+      border: 1px solid rgba(255, 240, 214, 0.16);
+      color: #fff8ed;
+      border-bottom-left-radius: 5px;
     }
+
     .meta {
       display: block;
       margin-bottom: 0.2rem;
-      font-size: 0.8rem;
-      opacity: 0.72;
-      font-weight: 700;
+      font-size: 0.76rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      opacity: 0.68;
+      font-weight: 800;
     }
-    form { display: flex; gap: 0.75rem; }
+
+    form {
+      display: flex;
+      gap: 0.75rem;
+      padding: 0.35rem;
+      border-radius: 999px;
+      background: rgba(24, 15, 18, 0.66);
+      border: 1px solid rgba(255, 240, 214, 0.15);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    }
+
     input {
       flex: 1;
       min-width: 0;
       padding: 0.9rem 1rem;
-      border: 1px solid rgba(222, 232, 202, 0.2);
+      border: 0;
       border-radius: 999px;
-      background: rgba(0, 0, 0, 0.26);
+      background: transparent;
       color: inherit;
       font: inherit;
       outline: none;
     }
-    input:focus {
-      border-color: #b8e68e;
-      box-shadow: 0 0 0 3px rgba(184, 230, 142, 0.16);
-    }
+
+    input::placeholder { color: rgba(255, 240, 214, 0.46); }
+    input:focus { box-shadow: 0 0 0 3px rgba(217, 160, 168, 0.18); }
+
     button {
-      padding: 0.9rem 1.25rem;
+      padding: 0.9rem 1.35rem;
       border: 0;
       border-radius: 999px;
-      background: #b8e68e;
-      color: #172012;
+      background: linear-gradient(135deg, var(--rose-bright), #f0d4be);
+      color: #2a171d;
       font: inherit;
-      font-weight: 800;
+      font-weight: 900;
       cursor: pointer;
+      box-shadow: 0 10px 28px rgba(91, 43, 52, 0.30);
     }
-    button:disabled { cursor: wait; opacity: 0.6; }
-    #status { min-height: 1.35rem; color: #c3cfb3; }
+
+    button:disabled { cursor: wait; opacity: 0.62; }
+
+    #status {
+      min-height: 1.35rem;
+      padding: 0 0.35rem;
+      color: rgba(255, 240, 214, 0.68);
+    }
+
     #status.error { color: #ffb4a8; }
-    audio { width: 100%; }
-    @media (max-width: 760px) {
-      main { height: calc(100vh - 1rem); width: calc(100vw - 1rem); padding: 0.8rem; }
-      .stage { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
-      .portrait-card { flex-direction: row; justify-content: flex-start; }
-      .portrait-frame { width: 120px; border-radius: 20px; }
-      .portrait-caption { text-align: left; }
+
+    audio {
+      width: 100%;
+      height: 38px;
+      opacity: 0.84;
+      filter: sepia(0.18) saturate(0.86);
+    }
+
+    @media (max-width: 860px) {
+      body { overflow: auto; place-items: stretch; }
+      main {
+        min-height: 100vh;
+        height: auto;
+        width: 100vw;
+        border-radius: 0;
+        padding: 0.85rem;
+      }
+      header { display: block; }
+      .stage { grid-template-columns: 1fr; grid-template-rows: auto minmax(320px, 1fr); }
+      .portrait-card { min-height: 310px; padding: 0.6rem; }
+      .portrait-frame { min-height: 260px; width: min(310px, 100%); }
+      #briar-portrait { width: min(310px, 100%); }
+      .portrait-caption { font-size: 0.86rem; }
       .message { max-width: 92%; }
+      form { border-radius: 24px; align-items: stretch; }
+      button { padding-inline: 1rem; }
     }
   </style>
 </head>
@@ -237,29 +388,56 @@ FRONTEND_HTML = """<!doctype html>
     const portraitFrame = document.getElementById('portrait-frame');
 
     const visemeBasePath = '/static/visemes';
-    const idleViseme = `${visemeBasePath}/briar_idle.png`;
+    const spriteMap = {
+      idle: { normal: 'briar_idle.png', blink: 'briar_idle_blink.png' },
+      e: { normal: 'briar_e.png', blink: 'briar_e_blink.png' },
+      a: { normal: 'briar_a.png', blink: 'briar_a_blink.png' },
+      open: { normal: 'briar_open.png', blink: 'briar_open_blink.png' },
+      o: { normal: 'briar_o.png', blink: 'briar_o_blink.png' },
+    };
 
-    const speakingVisemes = [
-      'briar_a.png',
-      'briar_a.png',
-      'briar_a.png',
-      'briar_e.png',
-      'briar_e.png',
-      'briar_e.png',
-      'briar_open.png',
-      'briar_o.png',
-    ];
+    const weightedMouths = ['a', 'a', 'a', 'e', 'e', 'e', 'open', 'o'];
+    const failedSprites = new Set();
 
+    let currentMouth = 'idle';
+    let isBlinking = false;
     let lipSyncTimer = null;
+    let blinkTimer = null;
+    let blinkEndTimer = null;
+    let currentSpriteSrc = '';
 
-    function setPortrait(src) {
-      portraitFrame.classList.remove('missing');
-      portrait.src = src;
+    function spriteUrl(filename) {
+      return `${visemeBasePath}/${filename}`;
     }
 
-    function chooseSpeakingViseme() {
-      const filename = speakingVisemes[Math.floor(Math.random() * speakingVisemes.length)];
-      return `${visemeBasePath}/${filename}`;
+    function preloadSprites() {
+      Object.values(spriteMap).forEach((sprites) => {
+        Object.values(sprites).forEach((filename) => {
+          const image = new Image();
+          image.addEventListener('error', () => failedSprites.add(filename));
+          image.src = spriteUrl(filename);
+        });
+      });
+    }
+
+    function updateBriarSprite() {
+      const sprites = spriteMap[currentMouth] || spriteMap.idle;
+      let filename = isBlinking ? sprites.blink : sprites.normal;
+
+      if (isBlinking && failedSprites.has(filename)) {
+        filename = sprites.normal;
+      }
+
+      const nextSrc = spriteUrl(filename);
+      if (portrait.getAttribute('src') !== nextSrc) {
+        currentSpriteSrc = nextSrc;
+        portraitFrame.classList.remove('missing');
+        portrait.src = nextSrc;
+      }
+    }
+
+    function chooseSpeakingMouth() {
+      return weightedMouths[Math.floor(Math.random() * weightedMouths.length)];
     }
 
     function stopLipSync() {
@@ -267,11 +445,13 @@ FRONTEND_HTML = """<!doctype html>
         clearTimeout(lipSyncTimer);
         lipSyncTimer = null;
       }
-      setPortrait(idleViseme);
+      currentMouth = 'idle';
+      updateBriarSprite();
     }
 
     function scheduleLipSyncFrame() {
-      setPortrait(chooseSpeakingViseme());
+      currentMouth = chooseSpeakingMouth();
+      updateBriarSprite();
       const nextDelayMs = 90 + Math.floor(Math.random() * 41);
       lipSyncTimer = setTimeout(scheduleLipSyncFrame, nextDelayMs);
     }
@@ -281,9 +461,43 @@ FRONTEND_HTML = """<!doctype html>
       scheduleLipSyncFrame();
     }
 
+    function scheduleNextBlink() {
+      if (blinkTimer) {
+        clearTimeout(blinkTimer);
+      }
+
+      const nextBlinkDelayMs = 3000 + Math.floor(Math.random() * 4001);
+      blinkTimer = setTimeout(() => {
+        isBlinking = true;
+        updateBriarSprite();
+
+        const blinkDurationMs = 90 + Math.floor(Math.random() * 41);
+        blinkEndTimer = setTimeout(() => {
+          isBlinking = false;
+          updateBriarSprite();
+          scheduleNextBlink();
+        }, blinkDurationMs);
+      }, nextBlinkDelayMs);
+    }
+
     portrait.addEventListener('error', () => {
+      const failedFilename = currentSpriteSrc.split('/').pop();
+      if (failedFilename) {
+        failedSprites.add(failedFilename);
+      }
+
+      if (failedFilename && failedFilename.includes('_blink')) {
+        isBlinking = false;
+        updateBriarSprite();
+        return;
+      }
+
       portraitFrame.classList.add('missing');
     });
+
+    preloadSprites();
+    updateBriarSprite();
+    scheduleNextBlink();
 
     player.addEventListener('play', startLipSync);
     player.addEventListener('pause', stopLipSync);
@@ -450,26 +664,20 @@ def replace_qwen3_target_text(workflow: dict[str, Any], text: str) -> dict[str, 
                 detail="Qwen3-TTS VoiceClone node does not contain an inputs object.",
             )
 
-        did_replace_text = False
         for field_name in TARGET_TEXT_FIELDS:
             if field_name in inputs:
                 inputs[field_name] = text
-                did_replace_text = True
-                break
+                if "max_new_tokens" in inputs:
+                    inputs["max_new_tokens"] = TTS_MAX_NEW_TOKENS
+                return updated_workflow
 
-        if not did_replace_text:
-            raise HTTPException(
-                status_code=500,
-                detail=(
-                    "Qwen3-TTS VoiceClone node is missing a target text input field. "
-                    f"Expected one of: {', '.join(TARGET_TEXT_FIELDS)}."
-                ),
-            )
-
-        if "max_new_tokens" in inputs:
-            inputs["max_new_tokens"] = TTS_MAX_NEW_TOKENS
-
-        return updated_workflow
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Qwen3-TTS VoiceClone node is missing a target text input field. "
+                f"Expected one of: {', '.join(TARGET_TEXT_FIELDS)}."
+            ),
+        )
 
     raise HTTPException(
         status_code=500,
@@ -606,6 +814,26 @@ def iter_save_audio_items(value: Any) -> list[dict[str, Any]]:
     return []
 
 
+def history_debug_details(history: dict[str, Any], prompt_id: str) -> dict[str, Any]:
+    prompt_history = history.get(prompt_id)
+    outputs = prompt_history.get("outputs") if isinstance(prompt_history, dict) else None
+
+    output_keys_by_node: dict[str, list[str]] = {}
+    if isinstance(outputs, dict):
+        output_keys_by_node = {
+            str(node_id): list(node_output.keys())
+            for node_id, node_output in outputs.items()
+            if isinstance(node_output, dict)
+        }
+
+    return {
+        "prompt_id": prompt_id,
+        "history_keys": list(history.keys()),
+        "output_node_ids": list(outputs.keys()) if isinstance(outputs, dict) else [],
+        "output_keys_by_node": output_keys_by_node,
+    }
+
+
 def extract_audio_output(history: dict[str, Any], prompt_id: str) -> AudioOutput | None:
     prompt_history = history.get(prompt_id)
     if not isinstance(prompt_history, dict):
@@ -632,16 +860,27 @@ def wait_for_audio_output(
 ) -> AudioOutput:
     history_url = f"{base_url}/history/{prompt_id}"
     deadline = time.monotonic() + timeout_seconds
+    last_history: dict[str, Any] = {}
 
     while True:
         request = Request(history_url, method="GET")
         history = read_json_from_comfyui(request)
-        audio_output = extract_audio_output(history, prompt_id)
+        last_history = history
 
+        audio_output = extract_audio_output(history, prompt_id)
         if audio_output is not None:
             return audio_output
 
         if time.monotonic() >= deadline:
+            debug_details = history_debug_details(last_history, prompt_id)
+            logger.warning(
+                "Timed out waiting for ComfyUI audio output. "
+                "prompt_id=%s history_keys=%s output_node_ids=%s output_keys_by_node=%s",
+                debug_details["prompt_id"],
+                debug_details["history_keys"],
+                debug_details["output_node_ids"],
+                debug_details["output_keys_by_node"],
+            )
             raise HTTPException(
                 status_code=504,
                 detail=(

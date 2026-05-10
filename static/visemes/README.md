@@ -9,7 +9,12 @@ Copy-Item "E:\Seagate 4TB(E Drive) DLs\E Drive Misc\BriarAI\Briar 2.0\briar_vise
 Expected filenames:
 
 - `briar_idle.png`
+- `briar_idle_blink.png`
 - `briar_a.png`
+- `briar_a_blink.png`
 - `briar_e.png`
+- `briar_e_blink.png`
 - `briar_open.png`
+- `briar_open_blink.png`
 - `briar_o.png`
+- `briar_o_blink.png`
